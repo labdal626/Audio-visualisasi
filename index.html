@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Audio Emotion Visualizer - WORK & SIMPLE</title>
+
+<style>
+  body, html {
+    margin: 0; padding: 0; height: 100%;
+    background: linear-gradient(135deg,#0f2027,#203a43,#2c5364);
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    color: #0ff;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+  h1 {
+    margin-bottom: 20px;
+    text-shadow: 0 0 15px #0ff;
+  }
+  button {
+    background-color: #0ff;
+    border: none;
+    padding: 10px 25px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 1.1rem;
+    font-weight: bold;
+    color: #002222;
+    box-shadow: 0 0 10px #0ff;
+    transition: background-color 0.3s ease;
+    margin-bottom: 20px;
+  }
+  button:hover { background-color: #00b7b7; }
+
+  #emotion {
+    font-size: 1.5rem;
+    margin-bottom: 15px;
+    min-height: 2rem;
+    text-align: center;
+    text-shadow: 0 0 10px #0ff;
+  }
+
+  canvas {
+    border-radius: 15px;
+    box-shadow: 0 0 20px #0ff;
+    background-color: #000;
+    display: block;
+  }
+
+  #recommendation {
+    margin-top: 15px;
+    font-style: italic;
+    font-size: 1.1rem;
+    max-width: 600px;
+    text-align: center;
+    padding: 0 10px;
+  }
+</style>
+</head>
+<body>
+
+<h1>🎙️ Audio Emotion Visualizer (WORK & SIMPLE)</h1>
+<button id="startBtn">Mulai Analisis</button>
+<div id="emotion">Emosi: -</div>
+<canvas id="visualizer" width="600" height="200"></canvas>
+<div id="recommendation"></div>
+
+<script>
+  const startBtn = document.getElementById('startBtn');
+  const emotionDisplay = document.getElementById('emotion');
+  const recommendation = document.getElementById('recommendation');
+  const canvas = document.getElementById('visualizer');
+  const ctx = canvas.getContext('2d');
+
+  let audioContext, analyser, microphone, dataArray, animationId;
+  let isRunning = false;
+
+  // Rekomendasi singkat untuk emosi
+  const recommendations = {
+    senang: "Hebat! Pertahankan mood positif Anda dan teruskan hal-hal yang Anda sukai.",
+    sedih: "Jangan ragu untuk bercerita pada teman atau keluarga. Coba meditasi atau istirahat yang cukup.",
+    marah: "Tarik napas dalam-dalam dan coba rileks. Hindari keputusan impulsif.",
+    netral: "Kondisi stabil, terus jaga keseimbangan dan produktivitas."
+  };
+
+  // Deteksi emosi sederhana dari data frekuensi (heuristik)
+  function detectEmotion(freqData) {
+    // normalisasi data ke 0-1
+    const normData = Array.from(freqData).map(v => v / 255);
+
+    // Energi frekuensi rendah, menengah, tinggi
+    const low = normData.slice(0, 15).reduce((a,b) => a + b, 0) / 15;
+    const mid = normData.slice(15, 40).reduce((a,b) => a + b, 0) / 25;
+    const high = normData.slice(40).reduce((a,b) => a + b, 0) / (normData.length - 40);
+
+    // Skor emosi dasar berdasarkan energi frekuensi
+    // Ini hanyalah contoh sederhana heuristik dan bisa dikembangkan AI
+    const scores = {
+      senang: high,
+      sedih: low,
+      marah: mid,
+      netral: 1 - Math.min(1, high + low + mid)
+    };
+
+    // Normalisasi ke total 1
+    const total = scores.senang + scores.sedih + scores.marah + scores.netral;
+    for (const key in scores) {
+      scores[key] /= total;
+    }
+
+    // Ambil emosi dengan skor tertinggi
+    let dominant = Object.entries(scores).reduce((a,b) => a[1] > b[1] ? a : b)[0];
+
+    return {dominant, scores};
+  }
+
+  // Visualisasi spektrogram sederhana pada canvas
+  function drawVisualizer(freqData) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const barWidth = canvas.width / freqData.length;
+    for(let i = 0; i < freqData.length; i++) {
+      const barHeight = freqData[i];
+      const r = barHeight + 50;
+      const g = 50;
+      const b = 200;
+
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.fillRect(i * barWidth, canvas.height - barHeight, barWidth - 1, barHeight);
+    }
+  }
+
+  async function startAudioAnalysis() {
+    if (isRunning) {
+      stopAudioAnalysis();
+      return;
+    }
+
+    try {
+      // Buat AudioContext dan ambil audio stream dari mikrofon
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      microphone = audioContext.createMediaStreamSource(stream);
+
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 128;
+      dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      microphone.connect(analyser);
+
+      isRunning = true;
+      startBtn.textContent = "Berhenti";
+
+      analyzeLoop();
+    } catch(error) {
+      alert('Gagal mengakses mikrofon: ' + error.message);
+      console.error(error);
+    }
+  }
+
+  function stopAudioAnalysis() {
+    if (audioContext) {
+      audioContext.close();
+      audioContext = null;
+    }
+    cancelAnimationFrame(animationId);
+    startBtn.textContent = "Mulai Analisis";
+    emotionDisplay.textContent = "Emosi: -";
+    recommendation.textContent = "";
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    isRunning = false;
+  }
+
+  function analyzeLoop() {
+    if (!isRunning) return;
+
+    analyser.getByteFrequencyData(dataArray);
+    drawVisualizer(dataArray);
+
+    const {dominant, scores} = detectEmotion(dataArray);
+
+    emotionDisplay.textContent = `Emosi: ${dominant.charAt(0).toUpperCase() + dominant.slice(1)} (${(scores[dominant]*100).toFixed(1)}%)`;
+    recommendation.textContent = recommendations[dominant];
+
+    animationId = requestAnimationFrame(analyzeLoop);
+  }
+
+  startBtn.addEventListener('click', startAudioAnalysis);
+
+</script>
+
+</body>
+</html>
